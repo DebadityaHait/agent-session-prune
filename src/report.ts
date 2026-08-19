@@ -1,5 +1,13 @@
-import type { Audit, Item, Manifest } from "./model.js";
+import type { Audit, Manifest } from "./model.js";
+
 export function json(audit: Audit): string { return `${JSON.stringify(audit, null, 2)}\n`; }
-export function terminal(audit: Audit): string { const byAgent = new Map<string, number>(); for (const item of audit.items) byAgent.set(item.agent, (byAgent.get(item.agent) ?? 0) + item.bytes); const lines = ["Agent Session Prune", "", `Local coding-agent storage: ${format(audit.bytes)}`, ""]; for (const [agent, bytes] of byAgent) lines.push(`${agent.padEnd(12)} ${format(bytes)}`); lines.push("", `Safe candidates: ${format(audit.candidates)}`, `Protected:       ${format(audit.protectedBytes)}`, "", "Nothing has been deleted."); if (audit.candidates) lines.push("Run `agent-prune archive --older-than 30d --yes` to create a restorable archive."); return `${lines.join("\n")}\n`; }
+export function terminal(audit: Audit): string {
+  const byAgent = new Map<string, number>(); for (const item of audit.items) byAgent.set(item.agent, (byAgent.get(item.agent) ?? 0) + item.bytes);
+  const lines = ["Agent Session Prune", "", `Files inspected: ${audit.items.length}`, `Storage inspected: ${format(audit.bytes)}`, ""];
+  for (const [agent, bytes] of byAgent) lines.push(`${agent.padEnd(12)} ${format(bytes)}`);
+  lines.push("", `Archive candidates: ${format(audit.candidates)}`, `Protected:          ${format(audit.protectedBytes)}`, "", "Audit is read-only; no files were deleted.");
+  if (audit.candidates) lines.push("Run `agent-prune archive --older-than 30d --yes` after reviewing the candidate list.");
+  return `${lines.join("\n")}\n`;
+}
 export function format(bytes: number): string { if (bytes < 1024) return `${bytes} B`; const units = ["KB", "MB", "GB", "TB"]; let value = bytes; let index = -1; do { value /= 1024; index++; } while (value >= 1024 && index < units.length - 1); return `${value.toFixed(1)} ${units[index]}`; }
 export function archiveText(manifest: Manifest): string { return `Archive ${manifest.archiveId}: ${manifest.entries.length} file(s), ${format(manifest.entries.reduce((n, e) => n + e.bytes, 0))}\n`; }
