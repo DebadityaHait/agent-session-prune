@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0 - 2026-08-20
+
+- Added Gemini, OpenCode, OpenClaw, Hermes, and Pi storage adapters alongside Claude and Codex.
+- Added provider, project, and storage-class filters plus duration parsing for minutes, hours, days, and weeks.
+- Added archive listing and checksum verification commands.
+- Updated the audit schema and CLI documentation to describe the product as an inventory/archive tool rather than a short demo.
+
 ## 0.2.1 - 2026-08-19
 
 - Fixed the published `agent-prune` executable metadata so npm installs the CLI correctly.

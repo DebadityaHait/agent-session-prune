@@ -1,6 +1,6 @@
 {
   "name": "agent-session-prune",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Find, archive, and safely reclaim coding-agent session storage before it eats your disk.",
   "type": "module",
   "main": "./dist/index.js",

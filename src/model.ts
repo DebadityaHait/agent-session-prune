@@ -1,8 +1,8 @@
-export type AgentId = "claude" | "codex";
+export type AgentId = "claude" | "codex" | "gemini" | "opencode" | "openclaw" | "hermes" | "pi";
 export type StorageClass = "session" | "debug" | "file-history" | "temp" | "configuration" | "credential" | "unknown";
 export type Protection = "candidate" | "recent" | "pinned" | "forbidden" | "symlink";
 export type Item = { id: string; agent: AgentId; path: string; relative: string; class: StorageClass; bytes: number; mtime: string; ageDays: number; protection: Protection; reason: string };
-export type Audit = { schemaVersion: 2; generatedAt: string; roots: string[]; items: Item[]; bytes: number; candidates: number; protectedBytes: number };
+export type Audit = { schemaVersion: 3; generatedAt: string; roots: string[]; items: Item[]; bytes: number; candidates: number; protectedBytes: number };
 export type Config = { pins: string[]; keepLast?: number; youngerThanDays?: number; minFreeDisk?: number };
 export type InventoryOptions = { stateRoot?: string };
 export type ManifestEntry = { id: string; original: string; archived: string; sha256: string; bytes: number };

@@ -5,88 +5,81 @@
 [![Node.js](https://img.shields.io/node/v/agent-session-prune)](https://nodejs.org/)
 [![License](https://img.shields.io/npm/l/agent-session-prune)](./LICENSE)
 
-Inspect, archive, and reclaim file-based coding-agent state without treating transcripts like disposable cache. Agent Session Prune inventories known Claude Code and Codex storage, explains why each file is protected or eligible, creates a checksum-verified archive, and only deletes after an explicit confirmation.
+Inventory, filter, archive, verify, restore, and reclaim local coding-agent state. The tool treats transcripts as valuable records: every candidate has a reason, protected classes are excluded, archives are checksum-verified, and deletion requires explicit confirmation.
 
-## Why this exists
+## Product boundary
 
-Session storage grows quietly, while provider CLIs do not expose one consistent cleanup workflow. The [Claude Code cleanup request](https://github.com/anthropics/claude-code/issues/35036) specifically calls for list, archive, and delete operations. [ccusage](https://github.com/ccusage/ccusage) is excellent for token and cost reporting, and [claude-sessions](https://github.com/hex/claude-sessions) is a full session manager. This package has a narrower responsibility: storage inventory and reversible housekeeping, with no transcript analytics and no provider process supervision.
+[ccusage](https://github.com/ccusage/ccusage) focuses on token and cost analytics. [claude-sessions](https://github.com/hex/claude-sessions), [cc9s](https://github.com/kincoy/cc9s), and [Session Manager](https://github.com/CatheadOwl/session-manager) focus on browsing, searching, and interactive session management. [GitHub Copilot’s session commands](https://docs.github.com/en/copilot/concepts/agents/copilot-cli/chronicle) provide provider-native deletion and pruning. Agent Session Prune is the provider-neutral storage lifecycle layer: metadata inventory, retention policy, reversible archive, integrity verification, and safe cleanup.
+
+## Supported storage
+
+| Provider | Default roots |
+| --- | --- |
+| Claude Code | `~/.claude/projects`, `debug`, `file-history`, `todos` |
+| Codex CLI | `~/.codex/sessions`, `logs`, `tmp` |
+| Gemini CLI | `~/.gemini/tmp`, `sessions` |
+| OpenCode | `~/.local/share/opencode/storage`, `~/.opencode/storage` |
+| OpenClaw | `~/.openclaw/agents` |
+| Hermes | `~/.config/hermes/sessions` |
+| Pi | `~/.pi/agent/sessions` |
+
+The scanner reads metadata and never parses or prints transcript content.
 
 ## Install
 
 ```bash
 npm install --save-dev agent-session-prune
-```
-
-Or run it without adding a dependency:
-
-```bash
-npx agent-session-prune audit
+npx agent-prune --help
 ```
 
 Node.js 20 or newer is required.
 
-## Review, archive, then prune
-
-Start with a read-only inventory:
+## Inspect and filter
 
 ```bash
-npx agent-session-prune audit
-npx agent-session-prune audit --json > agent-session-inventory.json
+npx agent-prune audit
+npx agent-prune audit --agent claude,codex --project my-repo
+npx agent-prune audit --class session --older-than 30d --json > session-inventory.json
 ```
 
-Preview and create an archive for files older than a chosen threshold:
+Durations accept minutes (`90m`), hours (`12h`), days (`30d`), and weeks (`2w`). The JSON report includes roots, item paths, storage class, age, bytes, protection status, and a stable item ID.
+
+## Archive lifecycle
 
 ```bash
-npx agent-session-prune archive --older-than 30d --dry-run
-npx agent-session-prune archive --older-than 30d --yes
+# Preview candidates; no files are written
+npx agent-prune archive --older-than 30d --dry-run
+
+# Copy candidates into a manifest with SHA-256 checksums
+npx agent-prune archive --older-than 30d --yes
+npx agent-prune archive list
+npx agent-prune archive verify <archive-id>
+
+# Restore original bytes and paths after verification
+npx agent-prune restore <archive-id> --yes
 ```
 
-The archive contains a manifest, original paths, sizes, and SHA-256 checksums. Originals remain untouched. A normal prune creates that archive before deleting candidates:
+Archive never removes the original. A normal prune creates an archive first:
 
 ```bash
-npx agent-session-prune prune --older-than 30d --yes
+npx agent-prune prune --older-than 30d --yes
 ```
 
-If storage pressure leaves no room for an archive, an explicit `--no-backup --yes` is required. Restore by archive ID:
+`--no-backup --yes` is an explicit opt-out for emergency disk pressure. Files changed after inventory are skipped rather than overwritten or deleted.
 
-```bash
-npx agent-session-prune restore <archive-id> --yes
-```
+## Protection model
 
-Example audit output:
-
-```text
-Agent Session Prune
-
-Files inspected: 184
-Storage inspected: 1.7 GB
-
-claude       1.2 GB
-codex        512.0 MB
-
-Archive candidates: 640.0 MB
-Protected:          1.1 GB
-
-Audit is read-only; no files were deleted.
-```
-
-## What is protected
-
-| Storage | Classification | Default action |
+| Class | Examples | Default |
 | --- | --- | --- |
-| Claude project `.jsonl`, Claude todos, Codex sessions | `session` | candidate only after the safety window |
-| Claude debug and Codex logs | `debug` | candidate only after the safety window |
-| Claude file history and snapshots | `file-history` | candidate only after the safety window |
-| temporary/output folders | `temp` | candidate only after the safety window |
-| settings, credentials, `.env`, token-like files | `configuration` / `credential` | never a candidate |
-| unrecognized files | `unknown` | never a candidate |
-| symbolic links | — | never followed or deleted |
+| `session` | JSONL transcripts and provider sessions | candidate after retention window |
+| `debug` | debug traces and logs | candidate after retention window |
+| `file-history` | snapshots and file history | candidate after retention window |
+| `temp` | temporary/output files | candidate after retention window |
+| `configuration` / `credential` | settings, `.env`, token-shaped files | never a candidate |
+| `unknown` | unrecognized data | never a candidate |
+| symlink | symbolic links | never followed |
 
-“Candidate” is not a command to delete. A candidate must also be unchanged since the audit; size or modification-time drift causes it to be skipped.
-
-## Retention and pins
-
-Create a project-local `.agent-prune.json`:
+Configure retention in `.agent-prune.json`:
 
 ```json
 {
@@ -96,42 +89,34 @@ Create a project-local `.agent-prune.json`:
 }
 ```
 
-`keepLast` preserves the newest session files per provider. `youngerThanDays` raises the minimum age. Pin a path or identifier from the command line:
-
-```bash
-npx agent-session-prune pin important-project
-```
-
-Use `--root` for the project containing configuration, archives, and pins. Use `--state-root` to inspect a fixture, redirected profile, or copied provider state:
-
-```bash
-npx agent-session-prune audit --state-root ./test-fixture --json
-```
+`keepLast` preserves the newest sessions per provider. `youngerThanDays` raises the minimum age. Use `--root` for the directory containing pins and archives, and `--state-root` for a redirected profile or test fixture.
 
 ## Commands
 
 ```text
-agent-prune audit [--root path] [--state-root path] [--json]
-agent-prune archive --older-than 30d [--root path] [--state-root path] [--dry-run|--yes]
+agent-prune audit [--agent ids] [--project name] [--class class] [--root path] [--state-root path] [--json]
+agent-prune archive [list|verify <id>] --older-than 30d [--root path] [--state-root path] [--dry-run|--yes]
 agent-prune prune --older-than 30d [--root path] [--state-root path] --yes [--no-backup]
 agent-prune restore <archive-id> [--root path] --yes
 agent-prune pin <path-or-session-id> [--root path]
 ```
 
-## Scope and limitations
+## Safety and limits
 
-- The inventory covers documented, file-based Claude Code and Codex roots; it does not claim to understand every provider cache or future format.
-- The tool reads metadata and copies bytes. It does not parse transcript content, calculate token cost, start an agent, or supervise a running session.
-- A restored file is byte-for-byte verified, but a provider may need to restart before it notices restored state.
-- Disk free-space thresholds are retained in the config schema for future policy integrations; they do not trigger deletion automatically.
+- audit is read-only;
+- archive copies through a temporary file, verifies SHA-256, then renames atomically;
+- restore verifies the archive before replacing a target;
+- unknown, credential, configuration, recent, pinned, modified, and symlink entries are protected;
+- provider formats can change, so adapter coverage is conservative and metadata-only.
 
-## Contributing
+## Development
 
 ```bash
 npm install
 npm run lint
 npm test
 npm run test:cli
+npm pack --dry-run
 ```
 
 Issues and pull requests are welcome in the [GitHub repository](https://github.com/DebadityaHait/agent-session-prune).

@@ -1,44 +1,25 @@
 #!/usr/bin/env node
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { audit, loadConfig, saveConfig } from "./inventory.js";
-import { createArchive, restore } from "./archive.js";
+import { createArchive, restore, verify } from "./archive.js";
 import { execute } from "./prune.js";
 import { json, terminal } from "./report.js";
-import type { Manifest } from "./model.js";
+import type { AgentId, Audit, Item, Manifest, StorageClass } from "./model.js";
 
-const args = process.argv.slice(2);
-const root = resolve(args.includes("--root") ? args[args.indexOf("--root") + 1] : process.cwd());
-const stateRoot = args.includes("--state-root") ? resolve(args[args.indexOf("--state-root") + 1]) : undefined;
-const parsedSafety = args.includes("--older-than") ? Number(args[args.indexOf("--older-than") + 1]?.replace(/d$/i, "")) : 2;
-const safety = Number.isFinite(parsedSafety) && parsedSafety >= 0 ? parsedSafety : 2;
-const config = await loadConfig(root);
-
-function help(): void { console.log(`Agent Session Prune - inspect and reclaim file-based coding-agent state\n\nUsage:\n  agent-prune audit [--root path] [--state-root path] [--json]\n  agent-prune archive --older-than 30d [--root path] [--state-root path] [--dry-run|--yes]\n  agent-prune prune --older-than 30d [--root path] [--state-root path] --yes [--no-backup]\n  agent-prune restore <archive-id> [--root path] --yes\n  agent-prune pin <path-or-session-id> [--root path]\n\nAudit is read-only. Archive copies checksum-verified candidates and never deletes originals.\nA prune creates that archive before deleting, unless --no-backup --yes explicitly opts out.`); }
-
+const args = process.argv.slice(2); const root = resolve(args.includes("--root") ? args[args.indexOf("--root") + 1] : process.cwd()); const stateRoot = args.includes("--state-root") ? resolve(args[args.indexOf("--state-root") + 1]) : undefined;
+function ageDays(value: string | undefined): number { const match = /^(\d+(?:\.\d+)?)(m|h|d|w)?$/i.exec(value ?? ""); if (!match) return 2; const amount = Number(match[1]); return match[2]?.toLowerCase() === "m" ? amount / 1440 : match[2]?.toLowerCase() === "h" ? amount / 24 : match[2]?.toLowerCase() === "w" ? amount * 7 : amount; }
+const safety = ageDays(args.includes("--older-than") ? args[args.indexOf("--older-than") + 1] : undefined); const config = await loadConfig(root); const archiveRoot = join(root, ".agent-prune-archives");
+function help(): void { console.log(`Agent Session Prune - inspect and reclaim local coding-agent state\n\nUsage:\n  agent-prune audit [--agent ids] [--project name] [--class class] [--root path] [--state-root path] [--json]\n  agent-prune archive [list|verify <id>] --older-than 30d [--root path] [--state-root path] [--dry-run|--yes]\n  agent-prune prune --older-than 30d [--root path] [--state-root path] --yes [--no-backup]\n  agent-prune restore <archive-id> [--root path] --yes\n  agent-prune pin <path-or-session-id> [--root path]\n\nAudit never writes or deletes. Archive copies and verifies bytes. Prune creates an archive before deletion unless --no-backup --yes is explicit.`); }
+function filtered(current: Audit): Audit { const project = args.includes("--project") ? args[args.indexOf("--project") + 1]?.toLowerCase() : undefined; const klass = args.includes("--class") ? args[args.indexOf("--class") + 1] as StorageClass : undefined; const items = current.items.filter((item) => (!project || `${item.path}/${item.relative}`.toLowerCase().includes(project)) && (!klass || item.class === klass)); return { ...current, items, bytes: items.reduce((sum, item) => sum + item.bytes, 0), candidates: items.filter((item) => item.protection === "candidate").reduce((sum, item) => sum + item.bytes, 0), protectedBytes: items.filter((item) => item.protection !== "candidate").reduce((sum, item) => sum + item.bytes, 0) }; }
 if (args.includes("--help") || args.includes("-h") || !args[0]) { help(); process.exit(0); }
-const current = await audit(config, safety, ["claude", "codex"], { stateRoot });
+const allAgents: AgentId[] = ["claude", "codex", "gemini", "opencode", "openclaw", "hermes", "pi"]; const selected = args.includes("--agent") ? (args[args.indexOf("--agent") + 1] ?? "").split(",").filter((value): value is AgentId => allAgents.includes(value as AgentId)) : allAgents; if (args.includes("--agent") && !selected.length) { console.error("agent-prune: --agent must name a supported provider"); process.exit(2); }
+if (args[0] === "archive" && args[1] === "list") { try { const entries = await readdir(archiveRoot, { withFileTypes: true }); for (const entry of entries.filter((item) => item.isDirectory())) console.log(entry.name); } catch { /* no archives yet */ } process.exit(0); }
+if (args[0] === "archive" && args[1] === "verify") { const id = args[2]; if (!id || !/^[A-Za-z0-9_.-]+$/.test(id)) { console.error("archive verify requires <archive-id>"); process.exit(2); } try { const manifest = JSON.parse(await readFile(join(archiveRoot, id, "manifest.json"), "utf8")) as Manifest; const result = await verify(manifest); console.log(`Verified ${result.verified}/${manifest.entries.length} file(s).`); if (result.failed.length) { console.error(`Checksum failures: ${result.failed.join(", ")}`); process.exit(1); } } catch { console.error(`Archive ${id} not found or unreadable`); process.exit(2); } process.exit(0); }
+const current = filtered(await audit(config, safety, selected, { stateRoot }));
 if (args[0] === "audit") { process.stdout.write(args.includes("--json") ? json(current) : terminal(current)); process.exit(0); }
 if (args[0] === "pin") { const pin = args[1]; if (!pin) { console.error("pin requires a path or session id"); process.exit(2); } await saveConfig(root, { ...config, pins: [...new Set([...config.pins, pin])] }); console.log(`Pinned ${pin}`); process.exit(0); }
-
-const archiveRoot = join(root, ".agent-prune-archives");
-if (args[0] === "archive") {
-  const preview = args.includes("--dry-run") || !args.includes("--yes");
-  const manifest = await createArchive(current, archiveRoot, preview);
-  console.log(`${manifest.entries.length} candidate file(s), ${manifest.entries.reduce((n, e) => n + e.bytes, 0)} bytes${preview ? " would be archived" : " archived"}.`);
-  if (!preview) console.log(`Archive: ${manifest.archiveId}`);
-  process.exit(0);
-}
-if (args[0] === "restore") {
-  const id = args[1]; if (!id || !args.includes("--yes") || !/^[A-Za-z0-9_.-]+$/.test(id)) { console.error("restore requires <archive-id> --yes"); process.exit(2); }
-  let manifest: Manifest; try { manifest = JSON.parse(await readFile(join(archiveRoot, id, "manifest.json"), "utf8")) as Manifest; } catch { console.error(`Archive ${id} not found`); process.exit(2); }
-  console.log(`Restored ${await restore(manifest, true)} file(s).`); process.exit(0);
-}
-if (args[0] === "prune") {
-  if (!args.includes("--yes")) { console.error("Nothing deleted. Review audit, then repeat with --yes."); process.exit(2); }
-  const noBackup = args.includes("--no-backup");
-  if (!noBackup) { const manifest = await createArchive(current, archiveRoot, false); console.log(`Archive ${manifest.archiveId} created with ${manifest.entries.length} file(s).`); }
-  const result = await execute(current.items, true, true);
-  console.log(`Removed ${result.removed} candidate file(s), ${result.bytes} bytes.`); process.exit(0);
-}
+if (args[0] === "archive") { const preview = args.includes("--dry-run") || !args.includes("--yes"); const manifest = await createArchive(current, archiveRoot, preview); console.log(`${manifest.entries.length} candidate file(s), ${manifest.entries.reduce((n, e) => n + e.bytes, 0)} bytes${preview ? " would be archived" : " archived"}.`); if (!preview) console.log(`Archive: ${manifest.archiveId}`); process.exit(0); }
+if (args[0] === "restore") { const id = args[1]; if (!id || !args.includes("--yes") || !/^[A-Za-z0-9_.-]+$/.test(id)) { console.error("restore requires <archive-id> --yes"); process.exit(2); } let manifest: Manifest; try { manifest = JSON.parse(await readFile(join(archiveRoot, id, "manifest.json"), "utf8")) as Manifest; } catch { console.error(`Archive ${id} not found`); process.exit(2); } console.log(`Restored ${await restore(manifest, true)} file(s).`); process.exit(0); }
+if (args[0] === "prune") { if (!args.includes("--yes")) { console.error("Nothing deleted. Review audit, then repeat with --yes."); process.exit(2); } if (!args.includes("--no-backup")) { const manifest = await createArchive(current, archiveRoot, false); console.log(`Archive ${manifest.archiveId} created with ${manifest.entries.length} file(s).`); } const result = await execute(current.items, true, true); console.log(`Removed ${result.removed} candidate file(s), ${result.bytes} bytes.`); process.exit(0); }
 console.error(`Unknown command: ${args[0]}`); process.exit(2);

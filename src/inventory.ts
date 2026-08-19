@@ -7,9 +7,15 @@ import type { AgentId, Audit, Config, InventoryOptions, Item, Protection, Storag
 
 type RootEntry = { agent: AgentId; root: string; relative: string; path: string; stat: Awaited<ReturnType<typeof lstat>> };
 
-const rootsFor = (agent: AgentId, stateRoot: string): string[] => agent === "claude"
-  ? [join(stateRoot, ".claude", "projects"), join(stateRoot, ".claude", "debug"), join(stateRoot, ".claude", "file-history"), join(stateRoot, ".claude", "todos")]
-  : [join(stateRoot, ".codex", "sessions"), join(stateRoot, ".codex", "logs"), join(stateRoot, ".codex", "tmp")];
+const rootsFor = (agent: AgentId, stateRoot: string): string[] => ({
+  claude: [join(stateRoot, ".claude", "projects"), join(stateRoot, ".claude", "debug"), join(stateRoot, ".claude", "file-history"), join(stateRoot, ".claude", "todos")],
+  codex: [join(stateRoot, ".codex", "sessions"), join(stateRoot, ".codex", "logs"), join(stateRoot, ".codex", "tmp")],
+  gemini: [join(stateRoot, ".gemini", "tmp"), join(stateRoot, ".gemini", "sessions")],
+  opencode: [join(stateRoot, ".local", "share", "opencode", "storage"), join(stateRoot, ".opencode", "storage")],
+  openclaw: [join(stateRoot, ".openclaw", "agents")],
+  hermes: [join(stateRoot, ".config", "hermes", "sessions")],
+  pi: [join(stateRoot, ".pi", "agent", "sessions")],
+}[agent]);
 
 const classFor = (agent: AgentId, root: string, file: string): StorageClass => {
   const value = file.replaceAll("\\", "/").toLowerCase();
@@ -20,7 +26,7 @@ const classFor = (agent: AgentId, root: string, file: string): StorageClass => {
   if (/file-history|snapshot/.test(value)) return "file-history";
   if (/[/](tmp|temp|output)([/]|$)/.test(value)) return "temp";
   if (agent === "claude" && (/[.]jsonl$/i.test(name) || /[/](projects|todos)([/]|$)/.test(value))) return "session";
-  if (agent === "codex" && (/session|transcript|conversation/i.test(value) || /[.]jsonl$/i.test(name))) return "session";
+  if (agent !== "claude" && (/session|transcript|conversation|chat|storage/i.test(value) || /[.]jsonl$/i.test(name))) return "session";
   return "unknown";
 };
 
@@ -45,7 +51,7 @@ function protection(itemClass: StorageClass, ageDays: number, config: Config, pa
   return "candidate";
 }
 
-export async function audit(config: Config = { pins: [] }, safetyDays = 2, agents: AgentId[] = ["claude", "codex"], options: InventoryOptions = {}): Promise<Audit> {
+export async function audit(config: Config = { pins: [] }, safetyDays = 2, agents: AgentId[] = ["claude", "codex", "gemini", "opencode", "openclaw", "hermes", "pi"], options: InventoryOptions = {}): Promise<Audit> {
   const stateRoot = options.stateRoot ?? homedir();
   const entries: RootEntry[] = [];
   for (const agent of agents) for (const root of rootsFor(agent, stateRoot)) entries.push(...await walk(root, root, [], agent));
@@ -58,7 +64,7 @@ export async function audit(config: Config = { pins: [] }, safetyDays = 2, agent
     const reason = protect === "candidate" ? `older than ${Math.max(safetyDays, config.youngerThanDays ?? 0)} days` : protect === "forbidden" ? "configuration, credential, or unknown storage" : protect === "symlink" ? "symlink is never followed" : protect === "pinned" ? "explicitly pinned" : "retention protection";
     return { id: createHash("sha256").update(`${entry.path}\0${bytes}\0${mtimeMs}`).digest("hex").slice(0, 16), agent: entry.agent, path: entry.path, relative: entry.relative.replaceAll("\\", "/"), class: cls, bytes, mtime: entry.stat.mtime.toISOString(), ageDays, protection: protect, reason };
   });
-  return { schemaVersion: 2, generatedAt: new Date().toISOString(), roots: [...new Set(entries.map((entry) => entry.root))], items, bytes: items.reduce((sum, item) => sum + item.bytes, 0), candidates: items.filter((item) => item.protection === "candidate").reduce((sum, item) => sum + item.bytes, 0), protectedBytes: items.filter((item) => item.protection !== "candidate").reduce((sum, item) => sum + item.bytes, 0) };
+  return { schemaVersion: 3, generatedAt: new Date().toISOString(), roots: [...new Set(entries.map((entry) => entry.root))], items, bytes: items.reduce((sum, item) => sum + item.bytes, 0), candidates: items.filter((item) => item.protection === "candidate").reduce((sum, item) => sum + item.bytes, 0), protectedBytes: items.filter((item) => item.protection !== "candidate").reduce((sum, item) => sum + item.bytes, 0) };
 }
 
 export async function loadConfig(root: string): Promise<Config> { try { const parsed = JSON.parse(await readFile(join(root, ".agent-prune.json"), "utf8")) as Partial<Config>; return { pins: Array.isArray(parsed.pins) ? parsed.pins.filter((pin): pin is string => typeof pin === "string") : [], keepLast: parsed.keepLast, youngerThanDays: parsed.youngerThanDays, minFreeDisk: parsed.minFreeDisk }; } catch { return { pins: [] }; } }
