@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1 - 2026-08-19
+
+- Fixed the published `agent-prune` executable metadata so npm installs the CLI correctly.
+
 ## 0.2.0 - 2026-08-19
 
 - Added fixtureable state-root inventory for Claude Code and Codex file storage.
