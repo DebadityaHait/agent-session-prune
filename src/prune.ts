@@ -1,0 +1,4 @@
+import { unlink, stat } from "node:fs/promises";
+import type { Item } from "./model.js";
+import { plan } from "./archive.js";
+export async function execute(items: Item[], yes: boolean, noBackup: boolean): Promise<{ removed: number; bytes: number }> { if (!yes) throw new Error("prune is destructive; repeat with --yes"); if (noBackup !== true) throw new Error("prune requires a prior archive; use --no-backup --yes only when you accept the risk"); let removed = 0, bytes = 0; for (const item of plan({ items } as never)) { try { const current = await stat(item.path); if (current.size !== item.bytes || Math.abs(current.mtimeMs - Date.parse(item.mtime)) > 1000) continue; await unlink(item.path); removed++; bytes += item.bytes; } catch { /* changed or vanished files are skipped */ } } return { removed, bytes }; }
